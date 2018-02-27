@@ -18,18 +18,18 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"context"
 	"github.com/linki/cloudformation-operator/pkg/apis/cloudformation/v1alpha1"
 	clientset "github.com/linki/cloudformation-operator/pkg/client/clientset/versioned"
-	"context"
-	"sync"
 	"os/signal"
+	"sync"
 	"syscall"
 )
 
 const (
-	ownerTagKey   = "kubernetes.io/controlled-by"
-	ownerTagValue = "cloudformation.linki.space/operator"
-	clusterIdTagKey   = "kubernetes.io/cluster-id"
+	ownerTagKey     = "kubernetes.io/controlled-by"
+	ownerTagValue   = "cloudformation.linki.space/operator"
+	clusterIdTagKey = "kubernetes.io/cluster-id"
 )
 
 var (
@@ -40,7 +40,7 @@ var (
 	dryRun     bool
 	debug      bool
 	version    string
-	clusterId string
+	clusterId  string
 )
 
 func init() {
@@ -81,7 +81,7 @@ func main() {
 	go func() {
 		wg.Add(1)
 		defer wg.Done()
-		if err := reconcileStacks(svc,client); err != nil {
+		if err := reconcileStacks(svc, client); err != nil {
 			log.Errorf("Error reconciling stacks: %s", err)
 		}
 		for {
@@ -89,7 +89,7 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := reconcileStacks(svc,client); err != nil {
+				if err := reconcileStacks(svc, client); err != nil {
 					log.Errorf("Error reconciling stacks: %s", err)
 				}
 			}
@@ -276,7 +276,7 @@ func createStack(svc cloudformationiface.CloudFormationAPI, client clientset.Int
 				Value: aws.String(ownerTagValue),
 			},
 			{
-				Key: aws.String(clusterIdTagKey),
+				Key:   aws.String(clusterIdTagKey),
 				Value: aws.String(clusterId),
 			},
 		},

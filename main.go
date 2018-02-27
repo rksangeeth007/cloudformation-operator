@@ -29,6 +29,7 @@ import (
 const (
 	ownerTagKey   = "kubernetes.io/controlled-by"
 	ownerTagValue = "cloudformation.linki.space/operator"
+	clusterIdTagKey   = "kubernetes.io/cluster-id"
 )
 
 var (
@@ -39,6 +40,7 @@ var (
 	dryRun     bool
 	debug      bool
 	version    string
+	clusterId string
 )
 
 func init() {
@@ -48,6 +50,7 @@ func init() {
 	kingpin.Flag("interval", "Interval between Stack synchronisations").Default("10m").DurationVar(&interval)
 	kingpin.Flag("dry-run", "If true, don't actually do anything.").BoolVar(&dryRun)
 	kingpin.Flag("debug", "Enable debug logging.").BoolVar(&debug)
+	kingpin.Flag("cluster-id", "Identify this cluster and only manage own stacks").Default("acme").StringVar(&clusterId)
 }
 
 func main() {
@@ -167,10 +170,17 @@ func getCurrentStacks(svc cloudformationiface.CloudFormationAPI) ([]*cloudformat
 	ownedStacks := []*cloudformation.Stack{}
 
 	for _, stack := range stacks.Stacks {
+		isOperatorManaged := false
+		isSameClusterId := false
 		for _, tag := range stack.Tags {
 			if aws.StringValue(tag.Key) == ownerTagKey && aws.StringValue(tag.Value) == ownerTagValue {
-				ownedStacks = append(ownedStacks, stack)
+				isOperatorManaged = true
+			} else if aws.StringValue(tag.Key) == clusterIdTagKey && aws.StringValue(tag.Value) == clusterId {
+				isSameClusterId = true
 			}
+		}
+		if isOperatorManaged && isSameClusterId {
+			ownedStacks = append(ownedStacks, stack)
 		}
 	}
 
@@ -268,13 +278,14 @@ func createStack(svc cloudformationiface.CloudFormationAPI, client clientset.Int
 		return err
 	}
 
+	log.Infof("Waiting for create stack %s to complete", stack.Name)
 	for {
 		foundStack, err := getStack(svc, stack.Name)
 		if err != nil {
 			return err
 		}
 
-		log.Debugf("Stack status: %s", aws.StringValue(foundStack.StackStatus))
+		log.Debugf("%s stack status: %s", stack.Name, aws.StringValue(foundStack.StackStatus))
 
 		if aws.StringValue(foundStack.StackStatus) != cloudformation.StackStatusCreateInProgress {
 			log.Infof("Create stack %s completed with status: %s", stack.Name, aws.StringValue(foundStack.StackStatus))
@@ -334,13 +345,14 @@ func updateStack(svc cloudformationiface.CloudFormationAPI, client clientset.Int
 		return err
 	}
 
+	log.Infof("Waiting for update stack %s to complete", stack.Name)
 	for {
 		foundStack, err := getStack(svc, stack.Name)
 		if err != nil {
 			return err
 		}
 
-		log.Debugf("Stack status: %s", aws.StringValue(foundStack.StackStatus))
+		log.Debugf("%s stack status: %s", stack.Name, aws.StringValue(foundStack.StackStatus))
 
 		if aws.StringValue(foundStack.StackStatus) != cloudformation.StackStatusUpdateInProgress {
 			log.Infof("Update stack %s completed with status: %s", stack.Name, aws.StringValue(foundStack.StackStatus))
@@ -386,6 +398,7 @@ func deleteStack(svc cloudformationiface.CloudFormationAPI, stack *cloudformatio
 		return err
 	}
 
+	log.Infof("Waiting for delete stack %s to complete", aws.StringValue(stack.StackName))
 	for {
 		foundStack, err := getStack(svc, aws.StringValue(stack.StackName))
 		if err != nil {
@@ -396,7 +409,7 @@ func deleteStack(svc cloudformationiface.CloudFormationAPI, stack *cloudformatio
 			break
 		}
 
-		log.Debug("Stack status: %s", aws.StringValue(foundStack.StackStatus))
+		log.Debug("%s stack status: %s", aws.StringValue(stack.StackName), aws.StringValue(foundStack.StackStatus))
 
 		if aws.StringValue(foundStack.StackStatus) != cloudformation.StackStatusDeleteInProgress {
 			log.Infof("Delete stack %s completed with status: %s", aws.StringValue(stack.StackName), aws.StringValue(foundStack.StackStatus))

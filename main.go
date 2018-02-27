@@ -416,7 +416,7 @@ func deleteStack(svc cloudformationiface.CloudFormationAPI, stack *cloudformatio
 			break
 		}
 
-		log.Debug("%s stack status: %s", aws.StringValue(stack.StackName), aws.StringValue(foundStack.StackStatus))
+		log.Debugf("%s stack status: %s", aws.StringValue(stack.StackName), aws.StringValue(foundStack.StackStatus))
 
 		if aws.StringValue(foundStack.StackStatus) != cloudformation.StackStatusDeleteInProgress {
 			log.Infof("Delete stack %s completed with status: %s", aws.StringValue(stack.StackName), aws.StringValue(foundStack.StackStatus))

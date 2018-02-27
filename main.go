@@ -275,6 +275,10 @@ func createStack(svc cloudformationiface.CloudFormationAPI, client clientset.Int
 				Key:   aws.String(ownerTagKey),
 				Value: aws.String(ownerTagValue),
 			},
+			{
+				Key: aws.String(clusterIdTagKey),
+				Value: aws.String(clusterId),
+			},
 		},
 	}
 	if _, err := svc.CreateStack(input); err != nil {

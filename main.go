@@ -266,20 +266,30 @@ func createStack(svc cloudformationiface.CloudFormationAPI, client clientset.Int
 		})
 	}
 
+	tags := []*cloudformation.Tag{
+		{
+			Key:   aws.String(ownerTagKey),
+			Value: aws.String(ownerTagValue),
+		},
+		{
+			Key:   aws.String(clusterIdTagKey),
+			Value: aws.String(clusterId),
+		},
+	}
+
+	// Add additional user defined tags to the stack
+	for k, v := range stack.Spec.Tags {
+		tags = append(tags, &cloudformation.Tag{
+			Key:   aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+
 	input := &cloudformation.CreateStackInput{
 		StackName:    aws.String(stack.Name),
 		TemplateBody: aws.String(stack.Spec.Template),
 		Parameters:   params,
-		Tags: []*cloudformation.Tag{
-			{
-				Key:   aws.String(ownerTagKey),
-				Value: aws.String(ownerTagValue),
-			},
-			{
-				Key:   aws.String(clusterIdTagKey),
-				Value: aws.String(clusterId),
-			},
-		},
+		Tags:         tags,
 	}
 	if _, err := svc.CreateStack(input); err != nil {
 		return err

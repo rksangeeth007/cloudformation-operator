@@ -21,6 +21,7 @@ type Stack struct {
 type StackSpec struct {
 	Template   string            `json:"template"`
 	Parameters map[string]string `json:"parameters"`
+	Tags map[string]string `json:"tags"`
 }
 
 // StackStatus is the status for a Stack resource

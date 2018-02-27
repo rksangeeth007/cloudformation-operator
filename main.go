@@ -81,6 +81,9 @@ func main() {
 	go func() {
 		wg.Add(1)
 		defer wg.Done()
+		if err := reconcileStacks(svc,client); err != nil {
+			log.Errorf("Error reconciling stacks: %s", err)
+		}
 		for {
 			select {
 			case <-ctx.Done():

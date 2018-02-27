@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -102,55 +101,67 @@ func main() {
 }
 
 func reconcileStacks(svc *cloudformation.CloudFormation, client *clientset.Clientset) error {
-	fmt.Println("current stacks:")
-	currentStacks := getCurrentStacks(svc)
+	log.Debug("current stacks:")
+	currentStacks, err := getCurrentStacks(svc)
+	if err != nil {
+		return err
+	}
 	for _, stack := range currentStacks {
-		fmt.Printf("  %s (%s)\n", aws.StringValue(stack.StackName), aws.StringValue(stack.StackId))
+		log.Debugf("  %s (%s)\n", aws.StringValue(stack.StackName), aws.StringValue(stack.StackId))
 	}
 
-	fmt.Println("desired stacks:")
-	desiredStacks := getDesiredStacks(client)
+	log.Debug("desired stacks:")
+	desiredStacks, err := getDesiredStacks(client)
+	if err != nil {
+		return err
+	}
 	for _, stack := range desiredStacks.Items {
-		fmt.Printf("  %s/%s\n", stack.Namespace, stack.Name)
+		log.Debugf("  %s/%s", stack.Namespace, stack.Name)
 	}
 
-	fmt.Println("matching stacks:")
+	log.Debug("matching stacks:")
 	matchingStacks := getMatchingStacks(currentStacks, desiredStacks)
 	for _, stack := range matchingStacks.Items {
-		fmt.Printf("  %s/%s\n", stack.Namespace, stack.Name)
+		log.Debugf("  %s/%s", stack.Namespace, stack.Name)
 	}
 
-	fmt.Println("superfluous stacks:")
+	log.Debug("superfluous stacks:")
 	superfluousStacks := getSuperfluousStacks(currentStacks, desiredStacks)
 	for _, stack := range superfluousStacks {
-		fmt.Printf("  %s (%s)\n", aws.StringValue(stack.StackName), aws.StringValue(stack.StackId))
+		log.Debugf("  %s (%s)", aws.StringValue(stack.StackName), aws.StringValue(stack.StackId))
 	}
 
-	fmt.Println("missing stacks:")
+	log.Debug("missing stacks:")
 	missingStacks := getMissingStacks(currentStacks, desiredStacks)
 	for _, stack := range missingStacks.Items {
-		fmt.Printf("  %s/%s\n", stack.Namespace, stack.Name)
+		log.Debugf("  %s/%s", stack.Namespace, stack.Name)
 	}
 
 	for _, stack := range matchingStacks.Items {
-		updateStack(svc, client, stack)
+		if err := updateStack(svc, client, stack); err != nil {
+			log.Errorf("Unable to update stack %s : %s - Skipping!", stack.Name, err)
+		}
 	}
 
 	for _, stack := range superfluousStacks {
-		deleteStack(svc, stack)
+		if err := deleteStack(svc, stack); err != nil {
+			log.Errorf("Unable to delete stack %s : %s - Skipping!", aws.StringValue(stack.StackName), err)
+		}
 	}
 
 	for _, stack := range missingStacks.Items {
-		createStack(svc, client, stack)
+		if err := createStack(svc, client, stack); err != nil {
+			log.Errorf("Unable to create stack %s : %s - Skipping!", stack.Name, err)
+		}
 	}
 
 	return nil
 }
 
-func getCurrentStacks(svc cloudformationiface.CloudFormationAPI) []*cloudformation.Stack {
+func getCurrentStacks(svc cloudformationiface.CloudFormationAPI) ([]*cloudformation.Stack, error) {
 	stacks, err := svc.DescribeStacks(&cloudformation.DescribeStacksInput{})
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	ownedStacks := []*cloudformation.Stack{}
@@ -163,16 +174,11 @@ func getCurrentStacks(svc cloudformationiface.CloudFormationAPI) []*cloudformati
 		}
 	}
 
-	return ownedStacks
+	return ownedStacks, nil
 }
 
-func getDesiredStacks(client clientset.Interface) *v1alpha1.StackList {
-	stackList, err := client.CloudformationV1alpha1().Stacks(v1.NamespaceAll).List(metav1.ListOptions{})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return stackList
+func getDesiredStacks(client clientset.Interface) (*v1alpha1.StackList, error) {
+	return client.CloudformationV1alpha1().Stacks(v1.NamespaceAll).List(metav1.ListOptions{})
 }
 
 func getMatchingStacks(current []*cloudformation.Stack, desired *v1alpha1.StackList) v1alpha1.StackList {
@@ -231,12 +237,12 @@ func getMissingStacks(current []*cloudformation.Stack, desired *v1alpha1.StackLi
 	return stackList
 }
 
-func createStack(svc cloudformationiface.CloudFormationAPI, client clientset.Interface, stack v1alpha1.Stack) {
-	fmt.Printf("creating stack: %s\n", stack.Name)
+func createStack(svc cloudformationiface.CloudFormationAPI, client clientset.Interface, stack v1alpha1.Stack) error {
+	log.Infof("creating stack: %s", stack.Name)
 
 	if dryRun {
-		fmt.Println("skipping...")
-		return
+		log.Info("skipping...")
+		return nil
 	}
 
 	params := []*cloudformation.Parameter{}
@@ -259,22 +265,29 @@ func createStack(svc cloudformationiface.CloudFormationAPI, client clientset.Int
 		},
 	}
 	if _, err := svc.CreateStack(input); err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	for {
-		foundStack := getStack(svc, stack.Name)
+		foundStack, err := getStack(svc, stack.Name)
+		if err != nil {
+			return err
+		}
 
-		fmt.Printf("Stack status: %s\n", aws.StringValue(foundStack.StackStatus))
+		log.Debugf("Stack status: %s", aws.StringValue(foundStack.StackStatus))
 
 		if aws.StringValue(foundStack.StackStatus) != cloudformation.StackStatusCreateInProgress {
+			log.Infof("Create stack %s completed with status: %s", stack.Name, aws.StringValue(foundStack.StackStatus))
 			break
 		}
 
 		time.Sleep(time.Second)
 	}
 
-	foundStack := getStack(svc, stack.Name)
+	foundStack, err := getStack(svc, stack.Name)
+	if err != nil {
+		return err
+	}
 
 	stackCopy := stack.DeepCopy()
 	stackCopy.Status.StackID = aws.StringValue(foundStack.StackId)
@@ -285,15 +298,18 @@ func createStack(svc cloudformationiface.CloudFormationAPI, client clientset.Int
 	}
 
 	if _, err := client.CloudformationV1alpha1().Stacks(stack.Namespace).Update(stackCopy); err != nil {
-		log.Fatal(err)
+		return err
 	}
+
+	return nil
 }
 
-func updateStack(svc cloudformationiface.CloudFormationAPI, client clientset.Interface, stack v1alpha1.Stack) {
-	fmt.Printf("updating stack: %s\n", stack.Name)
+func updateStack(svc cloudformationiface.CloudFormationAPI, client clientset.Interface, stack v1alpha1.Stack) error {
+	log.Debugf("updating stack: %s", stack.Name)
 
 	if dryRun {
-		fmt.Println("skipping...")
+		log.Info("skipping...")
+		return nil
 	}
 
 	params := []*cloudformation.Parameter{}
@@ -312,25 +328,32 @@ func updateStack(svc cloudformationiface.CloudFormationAPI, client clientset.Int
 
 	if _, err := svc.UpdateStack(input); err != nil {
 		if strings.Contains(err.Error(), "No updates are to be performed.") {
-			fmt.Println("Stack update not needed.")
-			return
+			log.Debug("Stack update not needed.")
+			return nil
 		}
-		log.Fatal(err)
+		return err
 	}
 
 	for {
-		foundStack := getStack(svc, stack.Name)
+		foundStack, err := getStack(svc, stack.Name)
+		if err != nil {
+			return err
+		}
 
-		fmt.Printf("Stack status: %s\n", aws.StringValue(foundStack.StackStatus))
+		log.Debugf("Stack status: %s", aws.StringValue(foundStack.StackStatus))
 
 		if aws.StringValue(foundStack.StackStatus) != cloudformation.StackStatusUpdateInProgress {
+			log.Infof("Update stack %s completed with status: %s", stack.Name, aws.StringValue(foundStack.StackStatus))
 			break
 		}
 
 		time.Sleep(time.Second)
 	}
 
-	foundStack := getStack(svc, stack.Name)
+	foundStack, err := getStack(svc, stack.Name)
+	if err != nil {
+		return err
+	}
 
 	stackCopy := stack.DeepCopy()
 	stackCopy.Status.StackID = aws.StringValue(foundStack.StackId)
@@ -341,15 +364,18 @@ func updateStack(svc cloudformationiface.CloudFormationAPI, client clientset.Int
 	}
 
 	if _, err := client.CloudformationV1alpha1().Stacks(stack.Namespace).Update(stackCopy); err != nil {
-		log.Fatal(err)
+		return err
 	}
+
+	return nil
 }
 
-func deleteStack(svc cloudformationiface.CloudFormationAPI, stack *cloudformation.Stack) {
-	fmt.Printf("deleting stack: %s\n", aws.StringValue(stack.StackName))
+func deleteStack(svc cloudformationiface.CloudFormationAPI, stack *cloudformation.Stack) error {
+	log.Infof("deleting stack: %s", aws.StringValue(stack.StackName))
 
 	if dryRun {
-		fmt.Println("skipping...")
+		log.Info("skipping...")
+		return nil
 	}
 
 	input := &cloudformation.DeleteStackInput{
@@ -357,41 +383,47 @@ func deleteStack(svc cloudformationiface.CloudFormationAPI, stack *cloudformatio
 	}
 
 	if _, err := svc.DeleteStack(input); err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	for {
-		foundStack := getStack(svc, aws.StringValue(stack.StackName))
+		foundStack, err := getStack(svc, aws.StringValue(stack.StackName))
+		if err != nil {
+			return err
+		}
 
 		if foundStack == nil {
 			break
 		}
 
-		fmt.Printf("Stack status: %s\n", aws.StringValue(foundStack.StackStatus))
+		log.Debug("Stack status: %s", aws.StringValue(foundStack.StackStatus))
 
 		if aws.StringValue(foundStack.StackStatus) != cloudformation.StackStatusDeleteInProgress {
+			log.Infof("Delete stack %s completed with status: %s", aws.StringValue(stack.StackName), aws.StringValue(foundStack.StackStatus))
 			break
 		}
 
 		time.Sleep(time.Second)
 	}
+
+	return nil
 }
 
-func getStack(svc cloudformationiface.CloudFormationAPI, name string) *cloudformation.Stack {
+func getStack(svc cloudformationiface.CloudFormationAPI, name string) (*cloudformation.Stack, error) {
 	resp, err := svc.DescribeStacks(&cloudformation.DescribeStacksInput{
 		StackName: aws.String(name),
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "does not exist") {
-			return nil
+			return nil, nil
 		}
-		log.Fatal(err)
+		return nil, err
 	}
 	if len(resp.Stacks) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	return resp.Stacks[0]
+	return resp.Stacks[0], nil
 }
 
 func newClient() (*clientset.Clientset, error) {

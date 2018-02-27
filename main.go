@@ -21,6 +21,10 @@ import (
 
 	"github.com/linki/cloudformation-operator/pkg/apis/cloudformation/v1alpha1"
 	clientset "github.com/linki/cloudformation-operator/pkg/client/clientset/versioned"
+	"context"
+	"sync"
+	"os/signal"
+	"syscall"
 )
 
 const (
@@ -68,51 +72,79 @@ func main() {
 		log.Fatal(err)
 	}
 
-	for {
-		fmt.Println("current stacks:")
-		currentStacks := getCurrentStacks(svc)
-		for _, stack := range currentStacks {
-			fmt.Printf("  %s (%s)\n", aws.StringValue(stack.StackName), aws.StringValue(stack.StackId))
-		}
+	ctx, cancel := context.WithCancel(context.Background())
+	ticker := time.NewTicker(interval)
+	var wg sync.WaitGroup
 
-		fmt.Println("desired stacks:")
-		desiredStacks := getDesiredStacks(client)
-		for _, stack := range desiredStacks.Items {
-			fmt.Printf("  %s/%s\n", stack.Namespace, stack.Name)
+	go func() {
+		wg.Add(1)
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := reconcileStacks(svc,client); err != nil {
+					log.Errorf("Error reconciling stacks: %s", err)
+				}
+			}
 		}
+	}()
 
-		fmt.Println("matching stacks:")
-		matchingStacks := getMatchingStacks(currentStacks, desiredStacks)
-		for _, stack := range matchingStacks.Items {
-			fmt.Printf("  %s/%s\n", stack.Namespace, stack.Name)
-		}
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	<-signalChan
 
-		fmt.Println("superfluous stacks:")
-		superfluousStacks := getSuperfluousStacks(currentStacks, desiredStacks)
-		for _, stack := range superfluousStacks {
-			fmt.Printf("  %s (%s)\n", aws.StringValue(stack.StackName), aws.StringValue(stack.StackId))
-		}
+	ticker.Stop()
+	cancel()
+	log.Debug("Waiting for reconcile stacks loop to finish...")
+	wg.Wait()
+}
 
-		fmt.Println("missing stacks:")
-		missingStacks := getMissingStacks(currentStacks, desiredStacks)
-		for _, stack := range missingStacks.Items {
-			fmt.Printf("  %s/%s\n", stack.Namespace, stack.Name)
-		}
-
-		for _, stack := range matchingStacks.Items {
-			updateStack(svc, client, stack)
-		}
-
-		for _, stack := range superfluousStacks {
-			deleteStack(svc, stack)
-		}
-
-		for _, stack := range missingStacks.Items {
-			createStack(svc, client, stack)
-		}
-
-		time.Sleep(interval)
+func reconcileStacks(svc *cloudformation.CloudFormation, client *clientset.Clientset) error {
+	fmt.Println("current stacks:")
+	currentStacks := getCurrentStacks(svc)
+	for _, stack := range currentStacks {
+		fmt.Printf("  %s (%s)\n", aws.StringValue(stack.StackName), aws.StringValue(stack.StackId))
 	}
+
+	fmt.Println("desired stacks:")
+	desiredStacks := getDesiredStacks(client)
+	for _, stack := range desiredStacks.Items {
+		fmt.Printf("  %s/%s\n", stack.Namespace, stack.Name)
+	}
+
+	fmt.Println("matching stacks:")
+	matchingStacks := getMatchingStacks(currentStacks, desiredStacks)
+	for _, stack := range matchingStacks.Items {
+		fmt.Printf("  %s/%s\n", stack.Namespace, stack.Name)
+	}
+
+	fmt.Println("superfluous stacks:")
+	superfluousStacks := getSuperfluousStacks(currentStacks, desiredStacks)
+	for _, stack := range superfluousStacks {
+		fmt.Printf("  %s (%s)\n", aws.StringValue(stack.StackName), aws.StringValue(stack.StackId))
+	}
+
+	fmt.Println("missing stacks:")
+	missingStacks := getMissingStacks(currentStacks, desiredStacks)
+	for _, stack := range missingStacks.Items {
+		fmt.Printf("  %s/%s\n", stack.Namespace, stack.Name)
+	}
+
+	for _, stack := range matchingStacks.Items {
+		updateStack(svc, client, stack)
+	}
+
+	for _, stack := range superfluousStacks {
+		deleteStack(svc, stack)
+	}
+
+	for _, stack := range missingStacks.Items {
+		createStack(svc, client, stack)
+	}
+
+	return nil
 }
 
 func getCurrentStacks(svc cloudformationiface.CloudFormationAPI) []*cloudformation.Stack {
